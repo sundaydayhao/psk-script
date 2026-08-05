@@ -50,10 +50,18 @@ python 20251127-psk31/qpsk31-mod.py
 python generate_psk_wavs.py --all --out-dir C:\projects\psk-script\generated-wav
 ```
 
+默认输出为 48 kHz / 16-bit / 单声道，中心频率 1000 Hz，最小时长 60 秒。单载波 BPSK 默认使用与 `Psk63.wav` 匹配的短前导 legacy 波形；如需 fldigi 长前导 BPSK，可加 `--fldigi-bpsk`。
+
 生成单个或多个模式：
 
 ```bash
 python generate_psk_wavs.py --mode BPSK31 --mode 8PSK500F --text "CQ CQ CQ DE TEST"
+```
+
+指定更长时长：
+
+```bash
+python generate_psk_wavs.py --mode BPSK63 --duration 260
 ```
 
 默认生成下面 27 个模式：

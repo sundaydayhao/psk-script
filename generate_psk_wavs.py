@@ -458,6 +458,48 @@ class PskGenerator:
         return self.prev_symbols[carrier] * SYM_VEC_POS[mapped & 0xF]
 
 
+def generate_legacy_bpsk(
+    mode: ModeSpec,
+    text: str,
+    sample_rate: int,
+    frequency: float,
+    amplitude: float,
+    psk_varicode: list[str],
+) -> array.array:
+    """Generate the short-preamble BPSK waveform used by the legacy scripts."""
+    bits = ["0"] * 8
+    for byte in text.encode("latin-1", errors="replace"):
+        bits.extend(psk_varicode[byte])
+        bits.extend(("0", "0"))
+    bits.extend(["1"] * 8)
+
+    frame_len = int(round(sample_rate / mode.baud))
+    if not math.isclose(frame_len, sample_rate / mode.baud):
+        raise ValueError(f"{mode.name}: sample rate {sample_rate} is not an integer multiple of baud {mode.baud}")
+
+    theta_b = math.pi * mode.baud / sample_rate
+    theta_c = TWOPI * frequency / sample_rate
+    level = []
+    phase = 0.0
+    for bit in bits:
+        if bit == "0":
+            for t in range(1, frame_len + 1):
+                phase0 = phase + theta_c * t
+                level.append(math.cos(theta_b * t) * math.sin(phase0))
+            phase = phase0 + math.pi
+        else:
+            for t in range(1, frame_len + 1):
+                phase1 = phase + theta_c * t
+                level.append(math.sin(phase1))
+            phase = phase1
+
+    peak = max((abs(sample) for sample in level), default=0.0)
+    scale = (32767.0 * amplitude / peak) if peak > 0 else 0.0
+    pcm = array.array("h")
+    pcm.extend(int(round(max(-32767.0, min(32767.0, sample * scale)))) for sample in level)
+    return pcm
+
+
 def parse_varicode_table(source: Path, table_name: str) -> list[str]:
     text = source.read_text(encoding="latin-1")
     match = re.search(rf"static const char \*{re.escape(table_name)}\[\]\s*=\s*\{{(.*?)\}};", text, re.S)
@@ -482,6 +524,60 @@ def write_wav(path: Path, sample_rate: int, samples: array.array) -> None:
         wav.setsampwidth(2)
         wav.setframerate(sample_rate)
         wav.writeframes(samples.tobytes())
+
+
+def make_samples(
+    spec: ModeSpec,
+    text: str,
+    sample_rate: int,
+    frequency: float,
+    amplitude: float,
+    psk_varicode: list[str],
+    mfsk_varicode: list[str],
+    fldigi_bpsk: bool,
+) -> array.array:
+    if spec.family == "bpsk" and spec.carriers == 1 and not fldigi_bpsk:
+        return generate_legacy_bpsk(
+            mode=spec,
+            text=text,
+            sample_rate=sample_rate,
+            frequency=frequency,
+            amplitude=amplitude,
+            psk_varicode=psk_varicode,
+        )
+
+    generator = PskGenerator(
+        mode=spec,
+        sample_rate=sample_rate,
+        center_frequency=frequency,
+        amplitude=amplitude,
+        psk_varicode=psk_varicode,
+        mfsk_varicode=mfsk_varicode,
+    )
+    return generator.generate(text)
+
+
+def make_min_duration_samples(
+    spec: ModeSpec,
+    text: str,
+    min_duration: float,
+    sample_rate: int,
+    frequency: float,
+    amplitude: float,
+    psk_varicode: list[str],
+    mfsk_varicode: list[str],
+    fldigi_bpsk: bool,
+) -> array.array:
+    payload = text if text else " "
+    samples = make_samples(spec, payload, sample_rate, frequency, amplitude, psk_varicode, mfsk_varicode, fldigi_bpsk)
+    target_frames = int(min_duration * sample_rate)
+    if min_duration > 0 and 0 < len(samples) < target_frames:
+        one_pass = samples
+        repeated = array.array("h")
+        while len(repeated) < target_frames:
+            repeated.extend(one_pass)
+        samples = repeated
+    return samples
 
 
 def read_text(args: argparse.Namespace) -> str:
@@ -511,10 +607,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text", help="Literal text to transmit.")
     parser.add_argument("--encoding", default="utf-8", help="Encoding for --input text.")
     parser.add_argument("--sample-rate", type=int, default=48000, help="WAV sample rate.")
-    parser.add_argument("--frequency", type=float, default=3000.0, help="Center audio frequency in Hz.")
-    parser.add_argument("--amplitude", type=float, default=0.85, help="Peak amplitude, 0.0 to 1.0.")
+    parser.add_argument("--frequency", type=float, default=1000.0, help="Center audio frequency in Hz.")
+    parser.add_argument("--amplitude", type=float, default=1.0, help="Peak amplitude, 0.0 to 1.0.")
+    parser.add_argument("--duration", type=float, default=60.0, help="Minimum WAV duration in seconds. Use 0 to disable repetition.")
     parser.add_argument("--mode", action="append", help="Mode to generate. Repeat for multiple modes.")
     parser.add_argument("--all", action="store_true", help="Generate all supported modes.")
+    parser.add_argument(
+        "--fldigi-bpsk",
+        action="store_true",
+        help="Use the fldigi-style long-preamble BPSK path instead of the legacy simple BPSK waveform.",
+    )
     return parser
 
 
@@ -523,6 +625,8 @@ def main() -> int:
     args = parser.parse_args()
     if not (0.0 < args.amplitude <= 1.0):
         parser.error("--amplitude must be in the range (0.0, 1.0]")
+    if args.duration < 0:
+        parser.error("--duration must be >= 0")
 
     fldigi_root = Path(args.fldigi_root)
     out_dir = Path(args.out_dir)
@@ -532,15 +636,17 @@ def main() -> int:
 
     for mode_name in modes:
         spec = MODES[mode_name]
-        generator = PskGenerator(
-            mode=spec,
+        samples = make_min_duration_samples(
+            spec=spec,
+            text=text,
+            min_duration=args.duration,
             sample_rate=args.sample_rate,
-            center_frequency=args.frequency,
+            frequency=args.frequency,
             amplitude=args.amplitude,
             psk_varicode=psk_varicode,
             mfsk_varicode=mfsk_varicode,
+            fldigi_bpsk=args.fldigi_bpsk,
         )
-        samples = generator.generate(text)
         out_path = out_dir / f"{mode_name}.wav"
         write_wav(out_path, args.sample_rate, samples)
         seconds = len(samples) / args.sample_rate
