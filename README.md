@@ -50,7 +50,7 @@ python 20251127-psk31/qpsk31-mod.py
 python generate_psk_wavs.py --all --out-dir C:\projects\psk-script\generated-wav
 ```
 
-默认输出为 48 kHz / 16-bit / 单声道，中心频率 1000 Hz，最小时长 60 秒。单载波 BPSK 默认使用与 `Psk63.wav` 匹配的短前导 legacy 波形；如需 fldigi 长前导 BPSK，可加 `--fldigi-bpsk`。
+默认输出为 48 kHz / 16-bit / 单声道，最小时长 60 秒。默认 `--frequency 2000` 沿用参考脚本的写法，实际载波主峰约为 1000 Hz。单载波 BPSK/QPSK 默认使用 `20251127-psk31` 和 `Youth-qpsk31` 中的 legacy numpy 波形；如需 fldigi 长前导 BPSK，可加 `--fldigi-bpsk`。
 
 生成单个或多个模式：
 

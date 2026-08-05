@@ -16,6 +16,8 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 
 TWOPI = 2.0 * math.pi
 
@@ -101,9 +103,9 @@ class ModeSpec:
 
 
 MODES: dict[str, ModeSpec] = {
-    "BPSK31": ModeSpec("BPSK31", "bpsk", 31.25, dcdbits=32),
-    "BPSK63": ModeSpec("BPSK63", "bpsk", 62.5, dcdbits=64),
-    "BPSK63F": ModeSpec("BPSK63F", "bpsk_fec", 62.5, dcdbits=64, fec_k=PSKR_K, fec_poly1=PSKR_POLY1, fec_poly2=PSKR_POLY2),
+    "BPSK31": ModeSpec("BPSK31", "bpsk", 31.0, dcdbits=32),
+    "BPSK63": ModeSpec("BPSK63", "bpsk", 63.0, dcdbits=64),
+    "BPSK63F": ModeSpec("BPSK63F", "bpsk_fec", 63.0, dcdbits=64, fec_k=PSKR_K, fec_poly1=PSKR_POLY1, fec_poly2=PSKR_POLY2),
     "BPSK125": ModeSpec("BPSK125", "bpsk", 125.0, dcdbits=128),
     "BPSK250": ModeSpec("BPSK250", "bpsk", 250.0, dcdbits=256),
     "BPSK500": ModeSpec("BPSK500", "bpsk", 500.0, dcdbits=512),
@@ -114,8 +116,8 @@ MODES: dict[str, ModeSpec] = {
     "4xPSK500": ModeSpec("4xPSK500", "bpsk", 500.0, carriers=4, dcdbits=512),
     "2xPSK800": ModeSpec("2xPSK800", "bpsk", 800.0, carriers=2, dcdbits=512),
     "2xPSK1000": ModeSpec("2xPSK1000", "bpsk", 1000.0, carriers=2, dcdbits=1024),
-    "QPSK31": ModeSpec("QPSK31", "qpsk", 31.25, dcdbits=32, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
-    "QPSK63": ModeSpec("QPSK63", "qpsk", 62.5, dcdbits=64, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
+    "QPSK31": ModeSpec("QPSK31", "qpsk", 31.0, dcdbits=32, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
+    "QPSK63": ModeSpec("QPSK63", "qpsk", 63.0, dcdbits=64, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
     "QPSK125": ModeSpec("QPSK125", "qpsk", 125.0, dcdbits=128, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
     "QPSK250": ModeSpec("QPSK250", "qpsk", 250.0, dcdbits=256, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
     "QPSK500": ModeSpec("QPSK500", "qpsk", 500.0, dcdbits=512, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
@@ -231,9 +233,7 @@ class PskGenerator:
         self.amplitude = amplitude
         self.psk_varicode = psk_varicode
         self.mfsk_varicode = mfsk_varicode
-        self.samples_per_symbol = int(round(sample_rate / mode.baud))
-        if not math.isclose(self.samples_per_symbol, sample_rate / mode.baud):
-            raise ValueError(f"{mode.name}: sample rate {sample_rate} is not an integer multiple of baud {mode.baud}")
+        self.samples_per_symbol = int(sample_rate / mode.baud)
 
         self.separation = 1.4
         self.sc_bw = mode.baud
@@ -473,30 +473,131 @@ def generate_legacy_bpsk(
         bits.extend(("0", "0"))
     bits.extend(["1"] * 8)
 
-    frame_len = int(round(sample_rate / mode.baud))
-    if not math.isclose(frame_len, sample_rate / mode.baud):
-        raise ValueError(f"{mode.name}: sample rate {sample_rate} is not an integer multiple of baud {mode.baud}")
-
-    theta_b = math.pi * mode.baud / sample_rate
-    theta_c = TWOPI * frequency / sample_rate
-    level = []
+    frame_len = int(sample_rate / mode.baud)
+    t = np.arange(1, frame_len, dtype=np.float64)
+    theta_b = np.pi * mode.baud / sample_rate
+    theta_c = np.pi * frequency / sample_rate
+    level_parts = []
     phase = 0.0
     for bit in bits:
         if bit == "0":
-            for t in range(1, frame_len + 1):
-                phase0 = phase + theta_c * t
-                level.append(math.cos(theta_b * t) * math.sin(phase0))
-            phase = phase0 + math.pi
+            phasev = phase + theta_c * t
+            level_parts.append(np.round(32767.0 * np.cos(theta_b * t) * np.sin(phasev)))
+            phase = float(phasev[-1] + np.pi)
         else:
-            for t in range(1, frame_len + 1):
-                phase1 = phase + theta_c * t
-                level.append(math.sin(phase1))
-            phase = phase1
+            phasev = phase + theta_c * t
+            level_parts.append(np.round(32767.0 * np.sin(phasev)))
+            phase = float(phasev[-1])
 
-    peak = max((abs(sample) for sample in level), default=0.0)
-    scale = (32767.0 * amplitude / peak) if peak > 0 else 0.0
+    wave_data = np.concatenate(level_parts) if level_parts else np.zeros(0, dtype=np.float64)
+    if amplitude != 1.0 and wave_data.size:
+        wave_data *= amplitude
+    wave_data = np.clip(np.round(wave_data), -32767, 32767).astype(np.int16)
     pcm = array.array("h")
-    pcm.extend(int(round(max(-32767.0, min(32767.0, sample * scale)))) for sample in level)
+    pcm.frombytes(wave_data.tobytes())
+    return pcm
+
+
+QPSK_MAP = {
+    ("00", "000"): "2", ("00", "001"): "1", ("00", "010"): "3", ("00", "011"): "0",
+    ("00", "100"): "3", ("00", "101"): "0", ("00", "110"): "2", ("00", "111"): "1",
+    ("01", "000"): "0", ("01", "001"): "3", ("01", "010"): "1", ("01", "011"): "2",
+    ("01", "100"): "1", ("01", "101"): "2", ("01", "110"): "0", ("01", "111"): "3",
+    ("10", "000"): "1", ("10", "001"): "2", ("10", "010"): "0", ("10", "011"): "3",
+    ("10", "100"): "0", ("10", "101"): "3", ("10", "110"): "1", ("10", "111"): "2",
+    ("11", "000"): "3", ("11", "001"): "0", ("11", "010"): "2", ("11", "011"): "1",
+    ("11", "100"): "2", ("11", "101"): "1", ("11", "110"): "3", ("11", "111"): "0",
+}
+
+QPSK_SIGNS = {
+    0: (1.0, 1.0),
+    1: (-1.0, 1.0),
+    2: (-1.0, -1.0),
+    3: (1.0, -1.0),
+}
+
+
+def qpsk_symbols_from_varicode(varicode: str) -> str:
+    if len(varicode) % 2:
+        varicode += "1"
+    symbols = []
+    tsym = "0"
+    for i in range(len(varicode)):
+        tsym = QPSK_MAP.get((varicode[i:i + 2], varicode[i + 2:i + 5]), tsym)
+        symbols.append(tsym)
+    return "".join(symbols)
+
+
+def generate_legacy_qpsk(
+    mode: ModeSpec,
+    text: str,
+    sample_rate: int,
+    frequency: float,
+    amplitude: float,
+    psk_varicode: list[str],
+) -> array.array:
+    bits = ["0"] * 32
+    for byte in text.encode("latin-1", errors="replace"):
+        bits.extend(psk_varicode[byte])
+        bits.extend(("0", "0"))
+    bits.extend(["1"] * 30)
+    symbols = qpsk_symbols_from_varicode("".join(bits))
+
+    frame_len_half = int(0.5 * sample_rate / mode.baud)
+    theta_b = np.pi * mode.baud / sample_rate
+    theta_c = np.pi * frequency / sample_rate
+    level_i_parts: list[np.ndarray] = []
+    level_q_parts: list[np.ndarray] = []
+
+    level_i_parts.append(np.zeros(max(frame_len_half - 1, 0), dtype=np.float64))
+    level_q_parts.append(np.zeros(max(frame_len_half - 1, 0), dtype=np.float64))
+
+    t = np.arange(frame_len_half + 1, 2 * frame_len_half, dtype=np.float64)
+    phasev = theta_c * t
+    if t.size:
+        level_i_parts.append(np.round(-22000.0 * np.cos(theta_b * t) * np.cos(phasev)))
+        level_q_parts.append(np.round(-22000.0 * np.cos(theta_b * t) * np.sin(phasev)))
+        phase0 = float(phasev[-1])
+    else:
+        phase0 = 0.0
+
+    curphase = 0
+    t_full = np.arange(1, 2 * frame_len_half, dtype=np.float64)
+    cos_shape = np.cos(theta_b * t_full)
+    ones = np.ones_like(t_full)
+
+    for sym in symbols:
+        prephase = curphase
+        curphase = (curphase + int(sym)) % 4
+        prev_i, prev_q = QPSK_SIGNS[prephase]
+        curr_i, curr_q = QPSK_SIGNS[curphase]
+        env_i = prev_i * cos_shape if prev_i != curr_i else curr_i * ones
+        env_q = prev_q * cos_shape if prev_q != curr_q else curr_q * ones
+        phasev = phase0 + theta_c * t_full
+        level_i_parts.append(np.round(22000.0 * env_i * np.cos(phasev)))
+        level_q_parts.append(np.round(22000.0 * env_q * np.sin(phasev)))
+        if phasev.size:
+            phase0 = float(phasev[-1])
+
+    t_tail = np.arange(1, frame_len_half, dtype=np.float64)
+    cos_tail = np.cos(theta_b * t_tail)
+    curr_i, curr_q = QPSK_SIGNS[curphase]
+    phasev = phase0 + theta_c * t_tail
+    if t_tail.size:
+        level_i_parts.append(np.round(22000.0 * curr_i * cos_tail * np.cos(phasev)))
+        level_q_parts.append(np.round(22000.0 * curr_q * cos_tail * np.sin(phasev)))
+
+    level_i_parts.append(np.zeros(max(frame_len_half - 1, 0), dtype=np.float64))
+    level_q_parts.append(np.zeros(max(frame_len_half - 1, 0), dtype=np.float64))
+
+    level_i = np.concatenate(level_i_parts) if level_i_parts else np.zeros(0, dtype=np.float64)
+    level_q = np.concatenate(level_q_parts) if level_q_parts else np.zeros(0, dtype=np.float64)
+    wave_data = level_i[: min(level_i.size, level_q.size)] + level_q[: min(level_i.size, level_q.size)]
+    if amplitude != 1.0 and wave_data.size:
+        wave_data *= amplitude
+    wave_data = np.clip(np.round(wave_data), -32767, 32767).astype(np.int16)
+    pcm = array.array("h")
+    pcm.frombytes(wave_data.tobytes())
     return pcm
 
 
@@ -545,11 +646,20 @@ def make_samples(
             amplitude=amplitude,
             psk_varicode=psk_varicode,
         )
+    if spec.family == "qpsk" and spec.carriers == 1:
+        return generate_legacy_qpsk(
+            mode=spec,
+            text=text,
+            sample_rate=sample_rate,
+            frequency=frequency,
+            amplitude=amplitude,
+            psk_varicode=psk_varicode,
+        )
 
     generator = PskGenerator(
         mode=spec,
         sample_rate=sample_rate,
-        center_frequency=frequency,
+        center_frequency=frequency * 0.5,
         amplitude=amplitude,
         psk_varicode=psk_varicode,
         mfsk_varicode=mfsk_varicode,
@@ -607,7 +717,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text", help="Literal text to transmit.")
     parser.add_argument("--encoding", default="utf-8", help="Encoding for --input text.")
     parser.add_argument("--sample-rate", type=int, default=48000, help="WAV sample rate.")
-    parser.add_argument("--frequency", type=float, default=1000.0, help="Center audio frequency in Hz.")
+    parser.add_argument("--frequency", type=float, default=2000.0, help="Legacy script Frequency value. The generated carrier peak is about Frequency/2 Hz.")
     parser.add_argument("--amplitude", type=float, default=1.0, help="Peak amplitude, 0.0 to 1.0.")
     parser.add_argument("--duration", type=float, default=60.0, help="Minimum WAV duration in seconds. Use 0 to disable repetition.")
     parser.add_argument("--mode", action="append", help="Mode to generate. Repeat for multiple modes.")
