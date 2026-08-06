@@ -19,7 +19,7 @@
 - `numpy`
 - `matplotlib`
 
-`generate_psk_wavs.py` 只使用 Python 标准库，不需要安装额外依赖。
+`generate_psk_wavs.py` 使用 Python 3 和 `numpy`。
 
 可使用下面的命令安装依赖：
 
@@ -50,7 +50,11 @@ python 20251127-psk31/qpsk31-mod.py
 python generate_psk_wavs.py --all --out-dir C:\projects\psk-script\generated-wav
 ```
 
-默认输出为 48 kHz / 16-bit / 单声道，最小时长 60 秒。默认 `--frequency 2000` 沿用参考脚本的写法，实际载波主峰约为 1000 Hz。单载波 BPSK/QPSK 默认使用 `20251127-psk31` 和 `Youth-qpsk31` 中的 legacy numpy 波形；如需 fldigi 长前导 BPSK，可加 `--fldigi-bpsk`。
+默认输出为 48 kHz / 16-bit / 单声道，中心频率 1500 Hz，峰值幅度 0.6，最小时长 60 秒。默认生成路径按 `C:\projects\fldigi\src\psk\psk.cxx` 的前导、尾部、相位映射和标准符号率实现，便于 fldigi 直接解码。若需要旧实验脚本波形，可加 `--legacy-single-carrier`。
+
+为提高 fldigi 解码稳定性，脚本默认生成一段连续发射：重复正文文本，但只保留一次前导和一次尾部，并在 WAV 开头和结尾各加 1 秒静音。`8PSK*F` 这类 FEC 模式编码成本较高，使用完整 fldigi 报文包重复。
+
+`BPSK63F`、`BPSK250`、`BPSK500`、`BPSK1000` 使用更长前导，以便 fldigi 在高符号率或 FEC 模式下更稳定锁定。
 
 生成单个或多个模式：
 

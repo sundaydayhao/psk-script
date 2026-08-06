@@ -103,9 +103,9 @@ class ModeSpec:
 
 
 MODES: dict[str, ModeSpec] = {
-    "BPSK31": ModeSpec("BPSK31", "bpsk", 31.0, dcdbits=32),
-    "BPSK63": ModeSpec("BPSK63", "bpsk", 63.0, dcdbits=64),
-    "BPSK63F": ModeSpec("BPSK63F", "bpsk_fec", 63.0, dcdbits=64, fec_k=PSKR_K, fec_poly1=PSKR_POLY1, fec_poly2=PSKR_POLY2),
+    "BPSK31": ModeSpec("BPSK31", "bpsk", 31.25, dcdbits=32),
+    "BPSK63": ModeSpec("BPSK63", "bpsk", 62.5, dcdbits=64),
+    "BPSK63F": ModeSpec("BPSK63F", "bpsk_fec", 62.5, dcdbits=64, fec_k=PSKR_K, fec_poly1=PSKR_POLY1, fec_poly2=PSKR_POLY2),
     "BPSK125": ModeSpec("BPSK125", "bpsk", 125.0, dcdbits=128),
     "BPSK250": ModeSpec("BPSK250", "bpsk", 250.0, dcdbits=256),
     "BPSK500": ModeSpec("BPSK500", "bpsk", 500.0, dcdbits=512),
@@ -116,8 +116,8 @@ MODES: dict[str, ModeSpec] = {
     "4xPSK500": ModeSpec("4xPSK500", "bpsk", 500.0, carriers=4, dcdbits=512),
     "2xPSK800": ModeSpec("2xPSK800", "bpsk", 800.0, carriers=2, dcdbits=512),
     "2xPSK1000": ModeSpec("2xPSK1000", "bpsk", 1000.0, carriers=2, dcdbits=1024),
-    "QPSK31": ModeSpec("QPSK31", "qpsk", 31.0, dcdbits=32, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
-    "QPSK63": ModeSpec("QPSK63", "qpsk", 63.0, dcdbits=64, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
+    "QPSK31": ModeSpec("QPSK31", "qpsk", 31.25, dcdbits=32, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
+    "QPSK63": ModeSpec("QPSK63", "qpsk", 62.5, dcdbits=64, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
     "QPSK125": ModeSpec("QPSK125", "qpsk", 125.0, dcdbits=128, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
     "QPSK250": ModeSpec("QPSK250", "qpsk", 250.0, dcdbits=256, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
     "QPSK500": ModeSpec("QPSK500", "qpsk", 500.0, dcdbits=512, fec_k=K, fec_poly1=POLY1, fec_poly2=POLY2),
@@ -129,7 +129,7 @@ MODES: dict[str, ModeSpec] = {
     "8PSK250F": ModeSpec("8PSK250F", "8psk", 250.0, dcdbits=256, flushlength=65, fec_k=K16, fec_poly1=K16_POLY1, fec_poly2=K16_POLY2),
     "8PSK500F": ModeSpec("8PSK500F", "8psk", 500.0, dcdbits=512, puncturing=True, flushlength=80, fec_k=K13, fec_poly1=K13_POLY1, fec_poly2=K13_POLY2),
     "8PSK1000F": ModeSpec("8PSK1000F", "8psk", 1000.0, dcdbits=1024, puncturing=True, flushlength=120, fec_k=PSKR_K, fec_poly1=PSKR_POLY1, fec_poly2=PSKR_POLY2),
-    "8PSK1200F": ModeSpec("8PSK1200F", "8psk", 1200.0, dcdbits=2048, puncturing=True, flushlength=175, fec_k=PSKR_K, fec_poly1=PSKR_POLY1, fec_poly2=PSKR_POLY2),
+    "8PSK1200F": ModeSpec("8PSK1200F", "8psk", 16000.0 / 13.0, dcdbits=2048, puncturing=True, flushlength=175, fec_k=PSKR_K, fec_poly1=PSKR_POLY1, fec_poly2=PSKR_POLY2),
 }
 
 MODE_ORDER = (
@@ -241,11 +241,9 @@ class PskGenerator:
         self.prev_symbols = [complex(1.0, 0.0) for _ in range(mode.carriers)]
         self.phase_acc = [0.0 for _ in range(mode.carriers)]
         self.pending_symbols: list[int] = []
-        self.samples: list[float] = []
-        self.shape = [
-            0.5 * math.cos(i * math.pi / self.samples_per_symbol) + 0.5
-            for i in range(self.samples_per_symbol)
-        ]
+        self.blocks: list[np.ndarray] = []
+        self.sample_index = np.arange(self.samples_per_symbol, dtype=np.float64)
+        self.shape = 0.5 * np.cos(self.sample_index * math.pi / self.samples_per_symbol) + 0.5
         self.disable_fec_now = mode.fec_disabled
 
         self.encoder = None
@@ -280,21 +278,28 @@ class PskGenerator:
             pad = 4 if self.mode.family == "8psk" else 2
             while self.pending_symbols:
                 self.tx_symbol(pad)
-        self.samples.extend([0.0] * int(0.25 * self.sample_rate))
-        peak = max((abs(sample) for sample in self.samples), default=0.0)
+        self.blocks.append(np.zeros(int(0.25 * self.sample_rate), dtype=np.float64))
+        wave_data = np.concatenate(self.blocks) if self.blocks else np.zeros(0, dtype=np.float64)
+        peak = float(np.max(np.abs(wave_data))) if wave_data.size else 0.0
         scale = (32767.0 * self.amplitude / peak) if peak > 0 else 0.0
+        wave_data = np.clip(np.round(wave_data * scale), -32767, 32767).astype(np.int16)
         pcm = array.array("h")
-        pcm.extend(int(round(max(-32767.0, min(32767.0, sample * scale)))) for sample in self.samples)
+        pcm.frombytes(wave_data.tobytes())
         return pcm
 
     def tx_preamble(self) -> None:
+        preamble_symbols = self.preamble_symbols()
         if self.mode.family == "bpsk_fec":
-            for _ in range(self.mode.dcdbits // 2):
+            if self.mode.name == "BPSK63F":
+                for _ in range(self.mode.dcdbits):
+                    self.tx_symbol(0)
+            for _ in range(preamble_symbols // 2):
                 self.tx_bit(1)
                 self.tx_bit(0)
             while len(self.pending_symbols) % self.mode.carriers:
                 self.tx_bit(0)
-            self.tx_char(0)
+            for _ in range(6 if self.mode.name == "BPSK63F" else 1):
+                self.tx_char(0)
             return
 
         if self.mode.family == "8psk":
@@ -302,21 +307,28 @@ class PskGenerator:
                 self.clear_fec()
                 old_disable = self.disable_fec_now
                 self.disable_fec_now = True
-                for _ in range(self.mode.dcdbits // 2):
+                for _ in range(preamble_symbols // 2):
                     self.tx_symbol(0)
                 self.disable_fec_now = old_disable
-                for _ in range(self.mode.dcdbits // 2):
+                for _ in range(preamble_symbols // 2):
                     self.tx_bit(0)
                     self.tx_bit(0)
                 self.tx_char(0)
             else:
-                for _ in range(self.mode.dcdbits):
+                for _ in range(preamble_symbols):
                     self.tx_symbol(0)
                 self.tx_char(0)
             return
 
-        for _ in range(self.mode.dcdbits):
+        for _ in range(preamble_symbols):
             self.tx_symbol(0)
+
+    def preamble_symbols(self) -> int:
+        if self.mode.name == "BPSK63F":
+            return max(self.mode.dcdbits, 256)
+        if self.mode.name in ("BPSK250", "BPSK500", "BPSK1000"):
+            return max(self.mode.dcdbits, int(3.0 * self.mode.baud))
+        return self.mode.dcdbits
 
     def tx_flush(self) -> None:
         if self.mode.family == "bpsk_fec":
@@ -418,30 +430,24 @@ class PskGenerator:
 
     def tx_carriers(self) -> None:
         n = self.samples_per_symbol
-        block = [0.0 for _ in range(n)]
+        block = np.zeros(n, dtype=np.float64)
         first = self.center_frequency + ((-1 * self.mode.carriers) + 1) * self.inter_carrier / 2.0
         for car, raw_symbol in enumerate(self.pending_symbols):
             symbol = self.map_symbol(raw_symbol, car)
             prev = self.prev_symbols[car]
             freq = first + car * self.inter_carrier
             delta = TWOPI * freq / self.sample_rate
-            phase = self.phase_acc[car]
-            for i in range(n):
-                shape_a = self.shape[i]
-                shape_b = 1.0 - shape_a
-                i_val = shape_a * prev.real + shape_b * symbol.real
-                q_val = shape_a * prev.imag + shape_b * symbol.imag
-                block[i] += (i_val * math.cos(phase) + q_val * math.sin(phase)) / self.mode.carriers
-                phase += delta
-                if phase > TWOPI:
-                    phase -= TWOPI
+            phases = self.phase_acc[car] + delta * self.sample_index
+            i_val = self.shape * prev.real + (1.0 - self.shape) * symbol.real
+            q_val = self.shape * prev.imag + (1.0 - self.shape) * symbol.imag
+            block += (i_val * np.cos(phases) + q_val * np.sin(phases)) / self.mode.carriers
             self.phase_acc[car] = (self.phase_acc[car] + delta * n) % TWOPI
             self.prev_symbols[car] = symbol
 
-        peak = max((abs(sample) for sample in block), default=0.0)
+        peak = float(np.max(np.abs(block))) if block.size else 0.0
         if peak > 0:
-            block = [sample / peak for sample in block]
-        self.samples.extend(block)
+            block = block / peak
+        self.blocks.append(block)
 
     def map_symbol(self, symbol: int, carrier: int) -> complex:
         if self.mode.family == "8psk" and not self.disable_fec_now:
@@ -635,9 +641,9 @@ def make_samples(
     amplitude: float,
     psk_varicode: list[str],
     mfsk_varicode: list[str],
-    fldigi_bpsk: bool,
+    legacy_single_carrier: bool,
 ) -> array.array:
-    if spec.family == "bpsk" and spec.carriers == 1 and not fldigi_bpsk:
+    if legacy_single_carrier and spec.family == "bpsk" and spec.carriers == 1:
         return generate_legacy_bpsk(
             mode=spec,
             text=text,
@@ -646,7 +652,7 @@ def make_samples(
             amplitude=amplitude,
             psk_varicode=psk_varicode,
         )
-    if spec.family == "qpsk" and spec.carriers == 1:
+    if legacy_single_carrier and spec.family == "qpsk" and spec.carriers == 1:
         return generate_legacy_qpsk(
             mode=spec,
             text=text,
@@ -659,7 +665,7 @@ def make_samples(
     generator = PskGenerator(
         mode=spec,
         sample_rate=sample_rate,
-        center_frequency=frequency * 0.5,
+        center_frequency=frequency,
         amplitude=amplitude,
         psk_varicode=psk_varicode,
         mfsk_varicode=mfsk_varicode,
@@ -676,18 +682,35 @@ def make_min_duration_samples(
     amplitude: float,
     psk_varicode: list[str],
     mfsk_varicode: list[str],
-    fldigi_bpsk: bool,
+    legacy_single_carrier: bool,
 ) -> array.array:
     payload = text if text else " "
-    samples = make_samples(spec, payload, sample_rate, frequency, amplitude, psk_varicode, mfsk_varicode, fldigi_bpsk)
+    samples = make_samples(spec, payload, sample_rate, frequency, amplitude, psk_varicode, mfsk_varicode, legacy_single_carrier)
     target_frames = int(min_duration * sample_rate)
     if min_duration > 0 and 0 < len(samples) < target_frames:
-        one_pass = samples
-        repeated = array.array("h")
-        while len(repeated) < target_frames:
-            repeated.extend(one_pass)
-        samples = repeated
+        if spec.family == "8psk" and not spec.fec_disabled:
+            one_pass = samples
+            repeated = array.array("h")
+            while len(repeated) < target_frames:
+                repeated.extend(one_pass)
+            return repeated
+        factor = max(2, math.ceil(target_frames / len(samples)))
+        while len(samples) < target_frames:
+            payload = (text if text else " ") * factor
+            samples = make_samples(spec, payload, sample_rate, frequency, amplitude, psk_varicode, mfsk_varicode, legacy_single_carrier)
+            factor *= 2
     return samples
+
+
+def add_silence(samples: array.array, sample_rate: int, lead_seconds: float, tail_seconds: float) -> array.array:
+    lead = int(lead_seconds * sample_rate)
+    tail = int(tail_seconds * sample_rate)
+    if lead <= 0 and tail <= 0:
+        return samples
+    out = array.array("h", [0]) * lead
+    out.extend(samples)
+    out.extend(array.array("h", [0]) * tail)
+    return out
 
 
 def read_text(args: argparse.Namespace) -> str:
@@ -717,15 +740,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text", help="Literal text to transmit.")
     parser.add_argument("--encoding", default="utf-8", help="Encoding for --input text.")
     parser.add_argument("--sample-rate", type=int, default=48000, help="WAV sample rate.")
-    parser.add_argument("--frequency", type=float, default=2000.0, help="Legacy script Frequency value. The generated carrier peak is about Frequency/2 Hz.")
-    parser.add_argument("--amplitude", type=float, default=1.0, help="Peak amplitude, 0.0 to 1.0.")
+    parser.add_argument("--frequency", type=float, default=1500.0, help="Center audio frequency in Hz.")
+    parser.add_argument("--amplitude", type=float, default=0.6, help="Peak amplitude, 0.0 to 1.0.")
     parser.add_argument("--duration", type=float, default=60.0, help="Minimum WAV duration in seconds. Use 0 to disable repetition.")
+    parser.add_argument("--lead-silence", type=float, default=1.0, help="Seconds of silence before the transmission.")
+    parser.add_argument("--tail-silence", type=float, default=1.0, help="Seconds of silence after the transmission.")
     parser.add_argument("--mode", action="append", help="Mode to generate. Repeat for multiple modes.")
     parser.add_argument("--all", action="store_true", help="Generate all supported modes.")
     parser.add_argument(
-        "--fldigi-bpsk",
+        "--legacy-single-carrier",
         action="store_true",
-        help="Use the fldigi-style long-preamble BPSK path instead of the legacy simple BPSK waveform.",
+        help="Use the older numpy scripts for single-carrier BPSK/QPSK instead of fldigi-compatible generation.",
     )
     return parser
 
@@ -737,6 +762,8 @@ def main() -> int:
         parser.error("--amplitude must be in the range (0.0, 1.0]")
     if args.duration < 0:
         parser.error("--duration must be >= 0")
+    if args.lead_silence < 0 or args.tail_silence < 0:
+        parser.error("--lead-silence and --tail-silence must be >= 0")
 
     fldigi_root = Path(args.fldigi_root)
     out_dir = Path(args.out_dir)
@@ -755,8 +782,9 @@ def main() -> int:
             amplitude=args.amplitude,
             psk_varicode=psk_varicode,
             mfsk_varicode=mfsk_varicode,
-            fldigi_bpsk=args.fldigi_bpsk,
+            legacy_single_carrier=args.legacy_single_carrier,
         )
+        samples = add_silence(samples, args.sample_rate, args.lead_silence, args.tail_silence)
         out_path = out_dir / f"{mode_name}.wav"
         write_wav(out_path, args.sample_rate, samples)
         seconds = len(samples) / args.sample_rate
