@@ -17,14 +17,12 @@
 脚本使用 Python 3，并依赖：
 
 - `numpy`
-- `matplotlib`
-
 `generate_psk_wavs.py` 使用 Python 3 和 `numpy`。
 
 可使用下面的命令安装依赖：
 
 ```bash
-pip install numpy matplotlib
+pip install numpy
 ```
 
 ## 使用说明
@@ -66,18 +64,6 @@ python generate_psk_wavs.py --mode BPSK31 --mode 8PSK500F --text "CQ CQ CQ DE TE
 
 ```bash
 python generate_psk_wavs.py --mode BPSK63 --duration 260
-```
-
-只生成星座图：
-
-```bash
-python generate_psk_wavs.py --all --constellation-only --plot-dir C:\projects\psk-script\generated-constellation
-```
-
-生成 WAV 的同时输出所选模式的星座图：
-
-```bash
-python generate_psk_wavs.py --mode BPSK500 --plot-constellations
 ```
 
 默认生成下面 27 个模式：

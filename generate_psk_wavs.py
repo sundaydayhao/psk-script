@@ -688,12 +688,6 @@ def make_min_duration_samples(
     samples = make_samples(spec, payload, sample_rate, frequency, amplitude, psk_varicode, mfsk_varicode, legacy_single_carrier)
     target_frames = int(min_duration * sample_rate)
     if min_duration > 0 and 0 < len(samples) < target_frames:
-        if spec.family == "8psk" and not spec.fec_disabled:
-            one_pass = samples
-            repeated = array.array("h")
-            while len(repeated) < target_frames:
-                repeated.extend(one_pass)
-            return repeated
         factor = max(2, math.ceil(target_frames / len(samples)))
         while len(samples) < target_frames:
             payload = (text if text else " ") * factor
@@ -711,71 +705,6 @@ def add_silence(samples: array.array, sample_rate: int, lead_seconds: float, tai
     out.extend(samples)
     out.extend(array.array("h", [0]) * tail)
     return out
-
-
-def constellation_points(spec: ModeSpec) -> list[tuple[str, complex]]:
-    if spec.family in ("bpsk", "bpsk_fec"):
-        return [
-            ("bit 0 / sym 0", SYM_VEC_POS[0]),
-            ("bit 1 / sym 2", SYM_VEC_POS[8]),
-        ]
-
-    if spec.family == "qpsk":
-        points = []
-        for raw in range(4):
-            mapped = ((4 - raw) & 3) * 4
-            points.append((f"sym {raw}", SYM_VEC_POS[mapped & 0xF]))
-        return points
-
-    if spec.family == "8psk" and not spec.fec_disabled:
-        return [(f"sym {raw}", GRAY_8PSK_POS[raw]) for raw in range(8)]
-
-    if spec.family == "8psk":
-        return [(f"sym {raw}", SYM_VEC_POS[(raw * 2) & 0xF]) for raw in range(8)]
-
-    raise ValueError(f"{spec.name}: unsupported constellation family {spec.family}")
-
-
-def plot_constellation(spec: ModeSpec, out_dir: Path) -> Path:
-    import matplotlib.pyplot as plt
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    points = constellation_points(spec)
-    xs = [point.real for _, point in points]
-    ys = [point.imag for _, point in points]
-
-    fig, ax = plt.subplots(figsize=(5.0, 5.0), dpi=140)
-    unit = plt.Circle((0.0, 0.0), 1.0, fill=False, linestyle="--", linewidth=1.0, color="0.65")
-    ax.add_patch(unit)
-    ax.axhline(0.0, color="0.75", linewidth=0.8)
-    ax.axvline(0.0, color="0.75", linewidth=0.8)
-    ax.scatter(xs, ys, s=70, color="#1f77b4", zorder=3)
-
-    for label, point in points:
-        ax.annotate(
-            label,
-            xy=(point.real, point.imag),
-            xytext=(6, 6),
-            textcoords="offset points",
-            fontsize=8,
-        )
-
-    fec = "FEC on" if spec.uses_fec and not spec.fec_disabled else "FEC off"
-    title = f"{spec.name} differential constellation"
-    subtitle = f"{spec.family}, {spec.baud:g} baud, {spec.carriers} carrier(s), {fec}"
-    ax.set_title(f"{title}\n{subtitle}", fontsize=10)
-    ax.set_xlabel("I")
-    ax.set_ylabel("Q")
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_xlim(-1.35, 1.35)
-    ax.set_ylim(-1.35, 1.35)
-    ax.grid(True, linestyle=":", linewidth=0.7, color="0.82")
-    fig.tight_layout()
-
-    out_path = out_dir / f"{spec.name}.png"
-    fig.savefig(out_path)
-    plt.close(fig)
-    return out_path
 
 
 def read_text(args: argparse.Namespace) -> str:
@@ -812,9 +741,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tail-silence", type=float, default=1.0, help="Seconds of silence after the transmission.")
     parser.add_argument("--mode", action="append", help="Mode to generate. Repeat for multiple modes.")
     parser.add_argument("--all", action="store_true", help="Generate all supported modes.")
-    parser.add_argument("--plot-constellations", action="store_true", help="Save constellation PNG plots for the selected modes.")
-    parser.add_argument("--plot-dir", default=r"C:\projects\psk-script\generated-constellation", help="Output directory for constellation plots.")
-    parser.add_argument("--constellation-only", action="store_true", help="Only save constellation plots; do not generate WAV files.")
     parser.add_argument(
         "--legacy-single-carrier",
         action="store_true",
@@ -835,14 +761,7 @@ def main() -> int:
 
     fldigi_root = Path(args.fldigi_root)
     out_dir = Path(args.out_dir)
-    plot_dir = Path(args.plot_dir)
     modes = selected_modes(args)
-
-    if args.constellation_only:
-        for mode_name in modes:
-            plot_path = plot_constellation(MODES[mode_name], plot_dir)
-            print(f"{mode_name:10s} {plot_path}")
-        return 0
 
     text = read_text(args)
     psk_varicode, mfsk_varicode = load_varicode_tables(fldigi_root)
@@ -865,9 +784,6 @@ def main() -> int:
         write_wav(out_path, args.sample_rate, samples)
         seconds = len(samples) / args.sample_rate
         print(f"{mode_name:10s} {out_path} {seconds:.2f}s")
-        if args.plot_constellations:
-            plot_path = plot_constellation(spec, plot_dir)
-            print(f"{'':10s} {plot_path}")
 
     return 0
 
