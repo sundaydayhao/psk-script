@@ -3,21 +3,22 @@ import numpy as np
 from pathlib import Path
 
 SampleRate = 48000
-Frequency = 3000
-OutputAmplitude = 5000
-ShowPlot = True
+CarrierFrequency = 1500
+OutputAmplitude = 1000
+LeadingSilenceSeconds = 2
+TrailingSilenceSeconds = 1
+ShowPlot = False
 txtsourcepath = "C:\\projects\\psk-script\\input.txt"
 wavdestinationpath = "C:\\projects\\psk-script\\modulation\\bpsk"
 
-# BaudRates = (31, 63, "63F", 125, 250, 500, 1000)
-BaudRates = (250, )
+BaudRates = (31, 63, "63F", 125, 250, 500, 1000)
 PreambleSymbols = {
     "31": 32,
     "63": 64,
     "63F": 64,
     "125": 128,
-    "250": 256,
-    "500": 512,
+    "250": 512,
+    "500": 1024,
     "1000": 128,
 }
 
@@ -140,7 +141,9 @@ print(CordLen)
 print(Varicode)
 
 deltaT = 1 / SampleRate
-thetaC = np.pi * Frequency * deltaT
+thetaC = 2 * np.pi * CarrierFrequency * deltaT
+leading_silence = [0] * int(SampleRate * LeadingSilenceSeconds)
+trailing_silence = [0] * int(SampleRate * TrailingSilenceSeconds)
 
 for BaudRate in BaudRates:
     baud_rate_label = str(BaudRate)
@@ -151,7 +154,7 @@ for BaudRate in BaudRates:
     FrameLen = int(SampleRate / baud_rate_value)
     tx_bits = ("0" * PreambleSymbols[baud_rate_label]) + Varicode
 
-    level = []
+    level = leading_silence.copy()
     for bit in tx_bits:
         prev_symbol = symbol
         if bit == '0':
@@ -163,6 +166,8 @@ for BaudRate in BaudRates:
             shaped_symbol = shapeA * prev_symbol + shapeB * symbol
             level.append(np.round(OutputAmplitude * shaped_symbol * np.sin(phase)))
             phase = phase + thetaC
+
+    level.extend(trailing_silence)
 
     data = np.array(level , dtype='object')
     z = data.astype('int16')
