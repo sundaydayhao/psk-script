@@ -68,6 +68,18 @@ python generate_psk_wavs.py --mode BPSK31 --mode 8PSK500F --text "CQ CQ CQ DE TE
 python generate_psk_wavs.py --mode BPSK63 --duration 260
 ```
 
+只生成星座图：
+
+```bash
+python generate_psk_wavs.py --all --constellation-only --plot-dir C:\projects\psk-script\generated-constellation
+```
+
+生成 WAV 的同时输出所选模式的星座图：
+
+```bash
+python generate_psk_wavs.py --mode BPSK500 --plot-constellations
+```
+
 默认生成下面 27 个模式：
 
 - BPSK31, BPSK63, BPSK63F, BPSK125, BPSK250, BPSK500, BPSK1000
