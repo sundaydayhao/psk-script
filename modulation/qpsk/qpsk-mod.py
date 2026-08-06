@@ -2,11 +2,12 @@ import wave as wv
 import numpy as np
 import matplotlib.pyplot as plt
 
+ShowPlot = False
 SampleRate = 48000
 Frequency = 2000
-BaudRate = 125
-txtsourcepath = "C:\\projects\\psk-script\\modulation\\input.txt"
-wavdestinationpath = "C:\\projects\\psk-script\\modulation"
+BaudRate = 31
+txtsourcepath = "C:\\projects\\psk-script\\input.txt"
+wavdestinationpath = "C:\\projects\\psk-script\\modulation\\qpsk\\"
 
 delim = "00"
 varicodetab = {
@@ -408,21 +409,22 @@ pskfile.writeframesraw(z)
 
 pskfile.close()
 
-wavfile = wv.open(wavdestinationpath + "Qpsk" + str(BaudRate) + ".wav", "rb")
-params = wavfile.getparams()
-nchannels, sampwidth, framerate, nframes = params[:4]
-nf = wavfile.getnframes()
-data = wavfile.readframes(nf)
-wavfile.close()
-        # 需要根据声道数和量化单位，将读取的二进制数据转换为一个可以计算的数组
-wave_data = np.frombuffer(data, dtype = np.short)
-        # 转置数据
-wave_data = wave_data.T
-        # 通过取样点数和取样频率计算出每个取样的时间。time 也是一个数组，与wave_data配对形成系列点坐标
-time = np.arange(0, nframes) / framerate
+if ShowPlot:
+    wavfile = wv.open(wavdestinationpath + "Qpsk" + str(BaudRate) + ".wav", "rb")
+    params = wavfile.getparams()
+    nchannels, sampwidth, framerate, nframes = params[:4]
+    nf = wavfile.getnframes()
+    data = wavfile.readframes(nf)
+    wavfile.close()
+            # 需要根据声道数和量化单位，将读取的二进制数据转换为一个可以计算的数组
+    wave_data = np.frombuffer(data, dtype = np.short)
+            # 转置数据
+    wave_data = wave_data.T
+            # 通过取样点数和取样频率计算出每个取样的时间。time 也是一个数组，与wave_data配对形成系列点坐标
+    time = np.arange(0, nframes) / framerate
 
-plt.plot(time, wave_data)
+    plt.plot(time, wave_data)
 
-plt.xlabel("time")
-plt.ylabel("data")
-plt.show()
+    plt.xlabel("time")
+    plt.ylabel("data")
+    plt.show()

@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 SampleRate = 48000
 Frequency = 3000
 BaudRate = 63
-txtsourcepath = "C:/PSK31source/three.txt"
-wavdestinationpath = "C:\PSK31source/"
+txtsourcepath = "C:\\projects\\psk-script\\input.txt"
+wavdestinationpath = "C:\\projects\\psk-script\\modulation\\qpsk\\"
 
 delim = "00"
 varicodetab = {
